@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (lint, typecheck, test)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mdm
+          POSTGRES_PASSWORD: mdm
+          POSTGRES_DB: enterprise_mdm
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U mdm -d enterprise_mdm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install ".[dev]"
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Mypy
+        run: mypy .
+
+      # Phase 15: the migration chain (0002 -> 0013) had never actually
+      # been applied to a real Postgres database anywhere in this
+      # project's history — every phase's own tests create schema via
+      # `Base.metadata.create_all` against SQLite (tests/conftest.py),
+      # entirely bypassing Alembic (see docs/architecture/phase-15.md).
+      # This is the first real verification that the hand-written DDL in
+      # every migration file actually applies cleanly, in order, to a
+      # clean Postgres database — using the same ephemeral `postgres`
+      # service already running for the test step below.
+      - name: Validate migration chain against a clean database
+        env:
+          DATABASE_URL: postgresql+asyncpg://mdm:mdm@localhost:5432/enterprise_mdm
+          JWT_SECRET: ci-test-secret
+        run: alembic upgrade head
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://mdm:mdm@localhost:5432/enterprise_mdm
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET: ci-test-secret
+        run: pytest --cov=app --cov-report=term-missing
+
+  frontend:
+    name: Frontend (lint, typecheck, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+        run: npm run build
+
+  docker-build:
+    name: Build Docker images (main only)
+    if: github.ref == 'refs/heads/main'
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend production image
+        run: docker build --target production -t enterprise-mdm-backend:ci ./backend
+
+      - name: Build frontend production image
+        run: docker build --target production -t enterprise-mdm-frontend:ci ./frontend

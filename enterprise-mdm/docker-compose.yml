@@ -1,0 +1,94 @@
+name: enterprise-mdm
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mdm
+      POSTGRES_PASSWORD: mdm
+      POSTGRES_DB: enterprise_mdm
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mdm -d enterprise_mdm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      target: dev
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://mdm:mdm@postgres:5432/enterprise_mdm
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Phase 15: the background-job worker (app/workers/loop.py, driven by
+  # scripts/worker.py) has run only as a bare local `python scripts/worker.py`
+  # process since Phase 7 — never its own container/service, even though
+  # the API and worker are already two independent deployables (the API
+  # never calls run_worker_once itself; only this script does). Same image
+  # as `backend` (identical dependencies — no second Dockerfile needed),
+  # different command, scaled/restarted independently of API request
+  # traffic. See docs/operations/production-deployment.md.
+  worker:
+    build:
+      context: ./backend
+      target: dev
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://mdm:mdm@postgres:5432/enterprise_mdm
+      REDIS_URL: redis://redis:6379/0
+    command: ["python", "scripts/worker.py"]
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/scripts:/app/scripts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

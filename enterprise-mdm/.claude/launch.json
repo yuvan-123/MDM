@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend-manual-verify",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "C:\\Users\\YUVANS~1\\AppData\\Local\\Temp\\claude\\C--Users-yuvanshankar-OneDrive-Desktop-MDM\\6f3db7f5-6a43-4cf1-b2f5-93b91785c294\\scratchpad\\run_dev_sqlite.py"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000
+    }
+  ]
+}
